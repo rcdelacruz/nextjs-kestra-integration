@@ -21,7 +21,9 @@ export default function TestPage() {
     const fetchEnvData = async () => {
       try {
         // First get namespace from config
-        const response = await fetch('/api/kestra-config');
+        const response = await fetch('/api/kestra-config', {
+          cache: 'no-store'
+        });
         
         if (response.ok) {
           const config = await response.json();
@@ -48,7 +50,8 @@ export default function TestPage() {
     try {
       setLoading(true);
       
-      const response = await fetch('/api/workflows', {
+      const timestamp = new Date().getTime(); // Add timestamp to break cache
+      const response = await fetch(`/api/workflows?_=${timestamp}`, {
         cache: 'no-store' // Ensure fresh data
       });
       
@@ -57,11 +60,14 @@ export default function TestPage() {
       }
       
       const data = await response.json();
-      setWorkflows(data);
+      // Handle the updated API response format
+      const workflowsData = data.workflows || data;
+      
+      setWorkflows(workflowsData);
       
       // Select the first workflow by default if available
-      if (data.length > 0) {
-        setSelectedWorkflow(data[0].id);
+      if (workflowsData.length > 0) {
+        setSelectedWorkflow(workflowsData[0].id);
       }
     } catch (err) {
       console.error('Error fetching workflows:', err);
@@ -99,7 +105,9 @@ export default function TestPage() {
       console.log('Triggering workflow:', selectedWorkflow);
       console.log('With inputs:', formData);
       
-      const response = await fetch('/api/trigger-workflow', {
+      // Add timestamp to prevent caching
+      const timestamp = new Date().getTime();
+      const response = await fetch(`/api/trigger-workflow?_=${timestamp}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -150,7 +158,10 @@ export default function TestPage() {
       setError(null);
       
       // Fetch the webhook key and namespace from API
-      const configResponse = await fetch('/api/kestra-config');
+      const timestamp = new Date().getTime();
+      const configResponse = await fetch(`/api/kestra-config?_=${timestamp}`, {
+        cache: 'no-store'
+      });
       const config = await configResponse.json();
       
       if (!config.namespace || !config.kestraUrl) {
@@ -158,7 +169,9 @@ export default function TestPage() {
       }
       
       // Get the webhook key - in a real app this should be more secure
-      const webhookKeyResponse = await fetch('/api/webhook-key');
+      const webhookKeyResponse = await fetch(`/api/webhook-key?_=${timestamp}`, {
+        cache: 'no-store'
+      });
       const webhookKeyData = await webhookKeyResponse.json();
       
       if (!webhookKeyData.key) {
@@ -181,7 +194,7 @@ export default function TestPage() {
       }
       
       // Call the webhook directly
-      const response = await fetch(webhookUrl, {
+      const response = await fetch(`${webhookUrl}?_=${timestamp}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),
@@ -230,7 +243,16 @@ export default function TestPage() {
       <h1 className="text-3xl font-bold mb-8">Test Kestra Integration</h1>
       
       <div className="mb-8 p-6 bg-white rounded-lg shadow">
-        <h2 className="text-xl font-semibold mb-4">Trigger Workflow</h2>
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-semibold">Trigger Workflow</h2>
+          <button
+            onClick={fetchWorkflows}
+            className="text-sm text-blue-600 hover:text-blue-800 px-3 py-1 border border-blue-600 rounded"
+            disabled={loading}
+          >
+            {loading ? 'Refreshing...' : 'Refresh Workflows'}
+          </button>
+        </div>
         
         {namespace ? (
           <p className="text-gray-600 mb-4">Using namespace: <strong>{namespace}</strong></p>
@@ -247,12 +269,6 @@ export default function TestPage() {
             <p className="text-yellow-700">
               No workflows found in your namespace. Please create a workflow in Kestra first.
             </p>
-            <button
-              onClick={fetchWorkflows}
-              className="mt-2 text-blue-600 hover:text-blue-800"
-            >
-              Refresh workflows
-            </button>
           </div>
         ) : (
           <form onSubmit={triggerWorkflow} className="space-y-4">
@@ -355,7 +371,7 @@ export default function TestPage() {
           {executionId && (
             <button
               onClick={resetMonitor}
-              className="text-sm text-red-600 hover:text-red-800"
+              className="text-sm text-red-600 hover:text-red-800 px-3 py-1 border border-red-600 rounded"
             >
               Reset Monitor
             </button>
