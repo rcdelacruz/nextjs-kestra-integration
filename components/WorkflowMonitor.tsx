@@ -9,6 +9,7 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
   const [error, setError] = useState(null);
   const [eventSource, setEventSource] = useState(null);
   const [progress, setProgress] = useState(0);
+  const [parsingError, setParsingError] = useState(null);
   
   // Close event source on unmount
   useEffect(() => {
@@ -25,6 +26,7 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
       setStatus('idle');
       setExecutionData(null);
       setProgress(0);
+      setParsingError(null);
       if (eventSource) {
         eventSource.close();
         setEventSource(null);
@@ -44,17 +46,19 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
     
     sse.onmessage = (event) => {
       try {
+        console.log('Received SSE data:', event.data);
         const data = JSON.parse(event.data);
         
         // Update execution data
         setExecutionData(data);
+        setParsingError(null);
         
         // Update status based on execution state
         if (data.state) {
           setStatus(data.state.toLowerCase());
         }
         
-        // Calculate progress based on tasks
+        // Calculate progress based on tasks or use a default increment if no tasks available
         if (data.tasks && data.tasks.length > 0) {
           const totalTasks = data.tasks.length;
           const completedTasks = data.tasks.filter(task => 
@@ -63,6 +67,9 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
           
           const calculatedProgress = (completedTasks / totalTasks) * 100;
           setProgress(calculatedProgress);
+        } else {
+          // If no tasks are available, just increment progress gradually
+          setProgress(prev => Math.min(prev + 5, 90)); // Cap at 90% until completion
         }
         
         // Close connection when execution is in terminal state
@@ -70,8 +77,11 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
           sse.close();
         }
       } catch (err) {
-        console.error('Error parsing SSE message:', err);
-        setError('Failed to parse execution data');
+        console.error('Error parsing SSE message:', err, event.data);
+        setParsingError(`Failed to parse execution data: ${err.message}`);
+        
+        // Even with parsing error, still increment progress
+        setProgress(prev => Math.min(prev + 2, 90));
       }
     };
     
@@ -113,6 +123,13 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
     );
   };
   
+  const viewInKestra = () => {
+    if (!executionId) return;
+    
+    const kestraUrl = process.env.NEXT_PUBLIC_KESTRA_URL || 'https://kestra.coderstudio.co';
+    window.open(`${kestraUrl}/ui/executions/${executionId}`, '_blank');
+  };
+  
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
@@ -132,6 +149,21 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
         </div>
       )}
       
+      {parsingError && (
+        <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4">
+          <p className="text-yellow-700">{parsingError}</p>
+          <p className="text-sm mt-1">
+            The workflow may still be running correctly. You can 
+            <button 
+              onClick={viewInKestra} 
+              className="ml-1 text-blue-600 hover:text-blue-800 underline"
+            >
+              view it directly in Kestra
+            </button>.
+          </p>
+        </div>
+      )}
+      
       {status === 'idle' ? (
         <div className="py-8 text-center text-gray-500">
           <p>Click "Run Workflow" to start execution</p>
@@ -144,18 +176,29 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
               {renderStatusBadge(status)}
             </div>
             
-            {executionData && (
-              <span className="text-sm text-gray-500">
-                Execution ID: {executionId}
-              </span>
+            {executionId && (
+              <div className="flex items-center space-x-2">
+                <span className="text-sm text-gray-500">
+                  Execution ID: {executionId}
+                </span>
+                <button 
+                  onClick={viewInKestra}
+                  className="text-xs text-blue-600 hover:text-blue-800"
+                >
+                  View in Kestra
+                </button>
+              </div>
             )}
           </div>
           
           <div className="progress-bar">
             <div className="progress-bar-fill" style={{ width: `${progress}%` }}></div>
           </div>
+          <div className="text-right text-xs text-gray-500">
+            {Math.round(progress)}% complete
+          </div>
           
-          {executionData && (
+          {executionData && !parsingError && executionData.tasks && (
             <div className="border rounded-lg overflow-hidden">
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
@@ -166,7 +209,7 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {executionData.tasks && executionData.tasks.map((task) => {
+                  {executionData.tasks.map((task) => {
                     const startTime = task.startDate ? new Date(task.startDate) : null;
                     const endTime = task.endDate ? new Date(task.endDate) : null;
                     let duration = 'N/A';
