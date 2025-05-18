@@ -40,11 +40,8 @@ export async function GET(request: NextRequest) {
       hasWebhookTrigger: !!(workflow.triggers && workflow.triggers.some((t: any) => t.type === 'io.kestra.plugin.core.trigger.Webhook')),
     }));
     
-    // Add timestamp to prevent any caching
-    return NextResponse.json({
-      workflows: formattedWorkflows,
-      timestamp: new Date().toISOString()
-    }, {
+    // Return directly without nesting - maintains backward compatibility
+    return NextResponse.json(formattedWorkflows, {
       headers: {
         'Cache-Control': 'no-store, max-age=0',
         'Pragma': 'no-cache',
@@ -54,10 +51,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('Error fetching workflows:', error);
     return NextResponse.json(
-      { 
-        error: 'Failed to fetch workflows',
-        timestamp: new Date().toISOString()
-      },
+      { error: 'Failed to fetch workflows' },
       { 
         status: 500,
         headers: {
