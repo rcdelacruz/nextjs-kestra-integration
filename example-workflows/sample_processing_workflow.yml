@@ -1,0 +1,48 @@
+id: sample_processing_workflow
+namespace: demo
+description: |
+  A sample workflow demonstrating integration with Next.js application.
+  This workflow processes data with multiple steps and provides progress updates.
+
+tasks:
+  - id: start
+    type: io.kestra.plugin.core.log.Log
+    message: "Starting sample processing workflow"
+
+  - id: fetch_data
+    type: io.kestra.plugin.core.http.Request
+    uri: https://jsonplaceholder.typicode.com/posts
+    method: GET
+
+  - id: process_data
+    type: io.kestra.plugin.scripts.shell.Commands
+    commands:
+      - sleep 3 # Simulate processing
+      - echo "Processing data..."
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+
+  - id: transform_data
+    type: io.kestra.plugin.scripts.shell.Commands
+    commands:
+      - sleep 5 # Simulate transformation
+      - echo "Transforming data..."
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+
+  - id: validate_data
+    type: io.kestra.plugin.scripts.shell.Commands
+    commands:
+      - sleep 2 # Simulate validation
+      - echo "Validating data..."
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+
+  - id: finalize
+    type: io.kestra.plugin.core.log.Log
+    message: "Workflow completed successfully"
+
+triggers:
+  - id: webhook
+    type: io.kestra.plugin.core.trigger.Webhook
+    key: YOUR_WEBHOOK_KEY_HERE
