@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { format } from 'date-fns';
 
 interface WorkflowMonitorProps {
@@ -21,6 +21,8 @@ interface ExecutionData {
   state: string;
   tasks?: ExecutionTask[];
   end?: string;
+  finalUpdate?: boolean;
+  retrySuccess?: boolean;
   [key: string]: any;
 }
 
@@ -48,6 +50,89 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }: Wo
   const [reconnectAttempt, setReconnectAttempt] = useState<number>(0);
   const MAX_RECONNECT_ATTEMPTS = 5;
   const INITIAL_RETRY_DELAY = 1000;
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Function to manually refresh status
+  const refreshStatus = useCallback(async () => {
+    if (!executionId) return;
+    
+    try {
+      setError(null);
+      
+      // Directly fetch current execution status
+      const response = await fetch(`${process.env.NEXT_PUBLIC_KESTRA_URL}/api/v1/executions/${executionId}`, {
+        cache: 'no-store', // Prevent caching
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch status: ${response.status} ${response.statusText}`);
+      }
+      
+      const data = await response.json() as ExecutionData;
+      
+      // Update state with fresh data
+      setExecutionData(data);
+      
+      if (data.state) {
+        const stateStr = String(data.state).toLowerCase();
+        setStatus(stateStr);
+        
+        // If terminal state, update UI appropriately
+        if (['success', 'failed', 'killed'].includes(stateStr)) {
+          setStreamState('completed');
+          setProgress(100);
+        }
+      }
+      
+      // Calculate task progress
+      if (data.tasks && Array.isArray(data.tasks) && data.tasks.length > 0) {
+        const totalTasks = data.tasks.length;
+        const completedTasks = data.tasks.filter(task => 
+          ['SUCCESS', 'FAILED', 'KILLED'].includes(String(task.state).toUpperCase())
+        ).length;
+        
+        const calculatedProgress = totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0;
+        setProgress(calculatedProgress);
+      }
+      
+      return data;
+    } catch (err) {
+      console.error('Error refreshing status:', err);
+      if (err instanceof Error) {
+        setError(`Failed to refresh: ${err.message}`);
+      } else {
+        setError('Failed to refresh: Unknown error');
+      }
+      return null;
+    }
+  }, [executionId]);
+
+  // Setup polling as backup when SSE fails
+  useEffect(() => {
+    // Clear any existing poll interval
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    
+    // Only poll if execution is running and SSE has issues
+    if (executionId && ['error', 'closed'].includes(streamState) && status !== 'idle' && 
+        !['success', 'failed', 'killed'].includes(status)) {
+      
+      // Poll every 5 seconds as fallback
+      pollIntervalRef.current = setInterval(refreshStatus, 5000);
+    }
+    
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    };
+  }, [executionId, status, streamState, refreshStatus]);
 
   // Function to create and setup EventSource
   const setupEventSource = useCallback(() => {
@@ -67,6 +152,11 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }: Wo
         console.log('Received SSE data:', event.data);
         const data = JSON.parse(event.data) as ExecutionData;
         
+        // If we receive a retry success message, clear errors
+        if (data.retrySuccess) {
+          setError(null);
+        }
+        
         // Update execution data
         setExecutionData(data);
         setParsingError(null);
@@ -76,13 +166,29 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }: Wo
           const stateStr = String(data.state).toLowerCase();
           setStatus(stateStr);
           
-          // If we reach a terminal state, close the stream naturally
+          // If we reach a terminal state, mark as completed
           if (['success', 'failed', 'killed'].includes(stateStr)) {
             setStreamState('completed');
+            setProgress(100); // Force progress to 100% when complete
+            
+            // Clean up event source
             sse.close();
             setEventSource(null);
+            
+            // Clear polling if active
+            if (pollIntervalRef.current) {
+              clearInterval(pollIntervalRef.current);
+              pollIntervalRef.current = null;
+            }
+            
             return;
           }
+        }
+        
+        // If we get finalUpdate flag, force progress to 100%
+        if (data.finalUpdate) {
+          setProgress(100);
+          return;
         }
         
         // Calculate progress based on tasks
@@ -128,12 +234,31 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }: Wo
           if (newSSE) setEventSource(newSSE);
         }, delay);
       } else if (streamState !== 'completed') {
-        setError('Connection to workflow status lost. Please refresh the page to retry.');
+        setError('Connection to workflow status lost. Using polling as fallback.');
+        // Fallback to polling - will be activated by the useEffect
       }
     };
     
     return sse;
   }, [executionId, reconnectAttempt, streamState]);
+
+  // Check status on tab visibility change
+  useEffect(() => {
+    if (!executionId) return;
+    
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        // When tab becomes visible again, refresh the status
+        refreshStatus();
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [executionId, refreshStatus]);
 
   // Setup EventSource when executionId changes
   useEffect(() => {
@@ -212,18 +337,29 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }: Wo
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h2 className="text-xl font-semibold">Workflow: {workflowId}</h2>
-        <button
-          className="btn-primary"
-          onClick={handleStartWorkflow}
-          disabled={status === 'running'}
-        >
-          Run Workflow
-        </button>
+        <div className="flex space-x-2">
+          {executionId && (
+            <button
+              className="btn-secondary text-sm"
+              onClick={refreshStatus}
+              disabled={status === 'idle'}
+            >
+              Refresh Status
+            </button>
+          )}
+          <button
+            className="btn-primary"
+            onClick={handleStartWorkflow}
+            disabled={status === 'running'}
+          >
+            Run Workflow
+          </button>
+        </div>
       </div>
       
       {shouldShowError && (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
-          <p>{error}</p>
+        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative">
+          <span className="block sm:inline">{error}</span>
         </div>
       )}
       
@@ -252,6 +388,9 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }: Wo
             <div className="flex items-center space-x-2">
               <h3 className="font-medium">Status:</h3>
               {renderStatusBadge(status)}
+              {streamState === 'error' && (
+                <span className="text-xs text-gray-500">(using polling fallback)</span>
+              )}
             </div>
             
             {executionId && (
@@ -270,7 +409,10 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }: Wo
           </div>
           
           <div className="progress-bar">
-            <div className="progress-bar-fill" style={{ width: `${progress}%` }}></div>
+            <div 
+              className="progress-bar-fill" 
+              style={{ width: `${progress}%` }}
+            ></div>
           </div>
           <div className="text-right text-xs text-gray-500">
             {Math.round(progress)}% complete
