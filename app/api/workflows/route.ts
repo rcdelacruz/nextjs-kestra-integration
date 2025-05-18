@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+export const dynamic = 'force-dynamic'; // Disable caching
+
 export async function GET(request: NextRequest) {
   try {
     const kestraUrl = process.env.NEXT_PUBLIC_KESTRA_URL;
@@ -16,7 +18,8 @@ export async function GET(request: NextRequest) {
     const response = await fetch(`${kestraUrl}/api/v1/flows/${namespace}`, {
       headers: {
         'Content-Type': 'application/json',
-      }
+      },
+      cache: 'no-store' // Prevent caching
     });
     
     if (!response.ok) {
@@ -37,12 +40,32 @@ export async function GET(request: NextRequest) {
       hasWebhookTrigger: !!(workflow.triggers && workflow.triggers.some((t: any) => t.type === 'io.kestra.plugin.core.trigger.Webhook')),
     }));
     
-    return NextResponse.json(formattedWorkflows);
+    // Add timestamp to prevent any caching
+    return NextResponse.json({
+      workflows: formattedWorkflows,
+      timestamp: new Date().toISOString()
+    }, {
+      headers: {
+        'Cache-Control': 'no-store, max-age=0',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+      }
+    });
   } catch (error) {
     console.error('Error fetching workflows:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch workflows' },
-      { status: 500 }
+      { 
+        error: 'Failed to fetch workflows',
+        timestamp: new Date().toISOString()
+      },
+      { 
+        status: 500,
+        headers: {
+          'Cache-Control': 'no-store, max-age=0',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        }
+      }
     );
   }
 }
