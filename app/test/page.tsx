@@ -60,14 +60,19 @@ export default function TestPage() {
       }
       
       const data = await response.json();
-      // Handle the updated API response format
-      const workflowsData = data.workflows || data;
+      console.log('Fetched workflows:', data);
       
-      setWorkflows(workflowsData);
-      
-      // Select the first workflow by default if available
-      if (workflowsData.length > 0) {
-        setSelectedWorkflow(workflowsData[0].id);
+      // Check if data is an array (expected format)
+      if (Array.isArray(data)) {
+        setWorkflows(data);
+        
+        // Select the first workflow by default if available
+        if (data.length > 0) {
+          setSelectedWorkflow(data[0].id);
+        }
+      } else {
+        console.error('Unexpected workflow data format:', data);
+        throw new Error('Received invalid workflow data format from server');
       }
     } catch (err) {
       console.error('Error fetching workflows:', err);
@@ -283,7 +288,7 @@ export default function TestPage() {
                 required
               >
                 <option value="">Select a workflow</option>
-                {workflows.map((workflow) => (
+                {Array.isArray(workflows) && workflows.map((workflow) => (
                   <option key={workflow.id} value={workflow.id}>
                     {workflow.id} {workflow.hasWebhookTrigger ? '(webhook ready)' : ''}
                   </option>
