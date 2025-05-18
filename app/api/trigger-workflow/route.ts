@@ -8,7 +8,7 @@ export async function POST(request: NextRequest) {
     // Extract inputs if provided
     const inputs = requestData.inputs || {};
     
-    // Get webhook key from environment variables
+    // Get webhook key from environment variables - will be compared with KV store value in Kestra
     const webhookKey = process.env.KESTRA_WEBHOOK_KEY;
     const namespace = process.env.KESTRA_NAMESPACE;
     const workflowId = requestData.workflowId;
@@ -28,6 +28,7 @@ export async function POST(request: NextRequest) {
     }
     
     // Trigger the Kestra workflow via webhook
+    // The webhook key in the URL should match the value in the KV store
     const kestraUrl = process.env.NEXT_PUBLIC_KESTRA_URL;
     const response = await fetch(
       `${kestraUrl}/api/v1/executions/webhook/${namespace}/${workflowId}/${webhookKey}`,
