@@ -49,10 +49,10 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }: Wo
       
       console.log('Fetching execution status for:', executionId);
       
-      const response = await fetch(`${process.env.NEXT_PUBLIC_KESTRA_URL}/api/v1/executions/${executionId}`, {
-        headers: {
-          'Content-Type': 'application/json',
-        },
+      // Use a Next.js API route instead of directly calling Kestra API
+      // This avoids CORS issues
+      const timestamp = new Date().getTime();
+      const response = await fetch(`/api/execution-status?executionId=${executionId}&_=${timestamp}`, {
         cache: 'no-store', // Ensure we always get fresh data
       });
       
