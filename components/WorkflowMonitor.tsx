@@ -53,16 +53,25 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
         setExecutionData(data);
         setParsingError(null);
         
-        // Update status based on execution state
+        // Update status based on execution state - safely check state type
         if (data.state) {
-          setStatus(data.state.toLowerCase());
+          // Check if state is a string before using toLowerCase
+          if (typeof data.state === 'string') {
+            setStatus(data.state.toLowerCase());
+          } else {
+            console.log('State is not a string:', data.state);
+            // Default to 'running' if state is not a string
+            setStatus('running');
+          }
         }
         
         // Calculate progress based on tasks or use a default increment if no tasks available
-        if (data.tasks && data.tasks.length > 0) {
+        if (data.tasks && Array.isArray(data.tasks) && data.tasks.length > 0) {
           const totalTasks = data.tasks.length;
           const completedTasks = data.tasks.filter(task => 
-            ['SUCCESS', 'FAILED', 'KILLED'].includes(task.state)
+            task.state && ['SUCCESS', 'FAILED', 'KILLED'].includes(
+              typeof task.state === 'string' ? task.state : String(task.state)
+            )
           ).length;
           
           const calculatedProgress = (completedTasks / totalTasks) * 100;
@@ -73,7 +82,9 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
         }
         
         // Close connection when execution is in terminal state
-        if (['SUCCESS', 'FAILED', 'KILLED'].includes(data.state)) {
+        if (data.state && ['SUCCESS', 'FAILED', 'KILLED'].includes(
+          typeof data.state === 'string' ? data.state : String(data.state)
+        )) {
           sse.close();
         }
       } catch (err) {
@@ -106,6 +117,9 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
   };
   
   const renderStatusBadge = (state) => {
+    // Ensure state is a string
+    const stateStr = typeof state === 'string' ? state.toLowerCase() : String(state).toLowerCase();
+    
     const stateMap = {
       'running': { class: 'bg-yellow-100 text-yellow-800', label: 'Running' },
       'success': { class: 'bg-green-100 text-green-800', label: 'Success' },
@@ -114,7 +128,7 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
       'idle': { class: 'bg-blue-100 text-blue-800', label: 'Idle' },
     };
     
-    const stateInfo = stateMap[state.toLowerCase()] || stateMap.idle;
+    const stateInfo = stateMap[stateStr] || stateMap.idle;
     
     return (
       <span className={`status-badge ${stateInfo.class}`}>
@@ -198,7 +212,7 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
             {Math.round(progress)}% complete
           </div>
           
-          {executionData && !parsingError && executionData.tasks && (
+          {executionData && !parsingError && executionData.tasks && Array.isArray(executionData.tasks) && (
             <div className="border rounded-lg overflow-hidden">
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
@@ -210,6 +224,10 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {executionData.tasks.map((task) => {
+                    // Safe access of task properties
+                    if (!task || typeof task !== 'object') return null;
+                    
+                    const taskId = task.id || 'Unknown';
                     const startTime = task.startDate ? new Date(task.startDate) : null;
                     const endTime = task.endDate ? new Date(task.endDate) : null;
                     let duration = 'N/A';
@@ -222,10 +240,10 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
                     }
                     
                     return (
-                      <tr key={task.id}>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{task.id}</td>
+                      <tr key={taskId}>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{taskId}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm">
-                          {renderStatusBadge(task.state)}
+                          {task.state ? renderStatusBadge(task.state) : 'Unknown'}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{duration}</td>
                       </tr>
