@@ -9,16 +9,28 @@ interface WorkflowMonitorProps {
   onStart: (workflowId: string) => Promise<void>;
 }
 
+interface ExecutionState {
+  current: string;
+  histories?: any[];
+  endDate?: string;
+  startDate?: string;
+  duration?: string;
+}
+
 interface ExecutionTask {
   id: string;
-  state: string;
+  state: ExecutionState | string;
   startDate?: string;
   endDate?: string;
   [key: string]: any;
 }
 
 interface ExecutionData {
-  state: string;
+  id: string;
+  namespace: string;
+  flowId: string;
+  state: ExecutionState | string;
+  taskRunList?: ExecutionTask[];
   tasks?: ExecutionTask[];
   end?: string;
   [key: string]: any;
@@ -38,6 +50,14 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }: Wo
   
   // Reference to store the polling interval
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Helper function to extract the current state string from state object
+  const getCurrentState = (state: ExecutionState | string): string => {
+    if (typeof state === 'string') {
+      return state;
+    }
+    return state?.current || 'UNKNOWN';
+  };
   
   // Function to fetch the current status
   const fetchStatus = async () => {
@@ -66,9 +86,9 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }: Wo
       // Update state with fetched data
       setExecutionData(data);
       
-      // Update status
+      // Handle both string and object state
       if (data.state) {
-        const stateStr = String(data.state).toLowerCase();
+        const stateStr = getCurrentState(data.state).toLowerCase();
         setStatus(stateStr);
         
         // If execution completed, set progress to 100%
@@ -83,12 +103,16 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }: Wo
         }
       }
       
+      // Use taskRunList if available, otherwise use tasks
+      const tasks = data.taskRunList || data.tasks;
+      
       // Calculate progress based on tasks
-      if (data.tasks && Array.isArray(data.tasks) && data.tasks.length > 0) {
-        const totalTasks = data.tasks.length;
-        const completedTasks = data.tasks.filter((task: ExecutionTask) => 
-          ['SUCCESS', 'FAILED', 'KILLED'].includes(String(task.state).toUpperCase())
-        ).length;
+      if (tasks && Array.isArray(tasks) && tasks.length > 0) {
+        const totalTasks = tasks.length;
+        const completedTasks = tasks.filter((task: ExecutionTask) => {
+          const taskState = getCurrentState(task.state).toUpperCase();
+          return ['SUCCESS', 'FAILED', 'KILLED'].includes(taskState);
+        }).length;
         
         // Only update progress if we have a valid calculation
         if (totalTasks > 0) {
@@ -175,8 +199,8 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }: Wo
     }
   };
   
-  const renderStatusBadge = (state: string) => {
-    const stateStr = String(state).toLowerCase();
+  const renderStatusBadge = (state: ExecutionState | string) => {
+    const stateStr = getCurrentState(state).toLowerCase();
     
     const stateMap: Record<string, StatusInfo> = {
       'running': { class: 'bg-yellow-100 text-yellow-800', label: 'Running' },
@@ -204,6 +228,24 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }: Wo
   
   const handleRefresh = () => {
     fetchStatus();
+  };
+  
+  // Get end date from either executionData.end or from state.endDate
+  const getEndDate = () => {
+    if (executionData?.end) {
+      return executionData.end;
+    }
+    
+    if (typeof executionData?.state === 'object' && executionData?.state?.endDate) {
+      return executionData.state.endDate;
+    }
+    
+    return null;
+  };
+  
+  // Extract tasks from either taskRunList or tasks
+  const getTasks = () => {
+    return executionData?.taskRunList || executionData?.tasks || [];
   };
   
   return (
@@ -245,7 +287,7 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }: Wo
           <div className="flex justify-between items-center">
             <div className="flex items-center space-x-2">
               <h3 className="font-medium">Status:</h3>
-              {renderStatusBadge(status)}
+              {renderStatusBadge(executionData?.state || status)}
               {loading && (
                 <span className="text-xs text-gray-500">(updating...)</span>
               )}
@@ -276,7 +318,7 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }: Wo
             {Math.round(progress)}% complete
           </div>
           
-          {executionData && executionData.tasks && Array.isArray(executionData.tasks) && (
+          {executionData && getTasks().length > 0 && (
             <div className="border rounded-lg overflow-hidden">
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
@@ -287,10 +329,16 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }: Wo
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {executionData.tasks.map((task: ExecutionTask) => {
+                  {getTasks().map((task: ExecutionTask) => {
                     const taskId = task.id || 'Unknown';
-                    const startTime = task.startDate ? new Date(task.startDate) : null;
-                    const endTime = task.endDate ? new Date(task.endDate) : null;
+                    
+                    // Handle different format for dates
+                    const startTime = task.startDate ? new Date(task.startDate) : 
+                                     (typeof task.state === 'object' && task.state.startDate ? new Date(task.state.startDate) : null);
+                    
+                    const endTime = task.endDate ? new Date(task.endDate) : 
+                                   (typeof task.state === 'object' && task.state.endDate ? new Date(task.state.endDate) : null);
+                    
                     let duration = 'N/A';
                     
                     if (startTime && endTime) {
@@ -318,9 +366,9 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }: Wo
           {status === 'success' && (
             <div className="bg-green-50 border border-green-200 rounded-lg p-4">
               <h3 className="font-medium text-green-800">Workflow Completed Successfully</h3>
-              {executionData?.end && (
+              {getEndDate() && (
                 <p className="text-sm text-green-700">
-                  Completed at: {format(new Date(executionData.end), 'yyyy-MM-dd HH:mm:ss')}
+                  Completed at: {format(new Date(getEndDate()), 'yyyy-MM-dd HH:mm:ss')}
                 </p>
               )}
             </div>
@@ -329,9 +377,9 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }: Wo
           {status === 'failed' && (
             <div className="bg-red-50 border border-red-200 rounded-lg p-4">
               <h3 className="font-medium text-red-800">Workflow Failed</h3>
-              {executionData?.end && (
+              {getEndDate() && (
                 <p className="text-sm text-red-700">
-                  Failed at: {format(new Date(executionData.end), 'yyyy-MM-dd HH:mm:ss')}
+                  Failed at: {format(new Date(getEndDate()), 'yyyy-MM-dd HH:mm:ss')}
                 </p>
               )}
             </div>
