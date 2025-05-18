@@ -48,7 +48,9 @@ export default function TestPage() {
     try {
       setLoading(true);
       
-      const response = await fetch('/api/workflows');
+      const response = await fetch('/api/workflows', {
+        cache: 'no-store' // Ensure fresh data
+      });
       
       if (!response.ok) {
         throw new Error(`Failed to fetch workflows: ${response.statusText}`);
@@ -106,6 +108,7 @@ export default function TestPage() {
           workflowId: selectedWorkflow,
           inputs: formData
         }),
+        cache: 'no-store'
       });
       
       const data = await response.json();
@@ -122,7 +125,12 @@ export default function TestPage() {
       }
       
       console.log('Workflow triggered:', data);
-      setExecutionId(data.executionId);
+      // Clear any existing executionId first to reset the WorkflowMonitor state
+      setExecutionId(null);
+      // Use setTimeout to ensure the component re-mounts completely
+      setTimeout(() => {
+        setExecutionId(data.executionId);
+      }, 100);
     } catch (err) {
       console.error('Error:', err);
       setError(err.message);
@@ -176,7 +184,8 @@ export default function TestPage() {
       const response = await fetch(webhookUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
+        body: JSON.stringify(formData),
+        cache: 'no-store'
       });
       
       if (!response.ok) {
@@ -186,7 +195,13 @@ export default function TestPage() {
       const data = await response.json();
       console.log('Direct webhook response:', data);
       
-      setExecutionId(data.id);
+      // Clear executionId first to reset the WorkflowMonitor state
+      setExecutionId(null);
+      // Use setTimeout to ensure the component re-mounts completely
+      setTimeout(() => {
+        setExecutionId(data.id);
+      }, 100);
+      
       setDebugInfo({
         directCall: true,
         url: webhookUrl,
@@ -202,6 +217,12 @@ export default function TestPage() {
     } finally {
       setLoading(false);
     }
+  };
+  
+  const resetMonitor = () => {
+    setExecutionId(null);
+    setDebugInfo(null);
+    setError(null);
   };
   
   return (
@@ -329,10 +350,21 @@ export default function TestPage() {
       </div>
       
       <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-semibold mb-4">Workflow Monitor</h2>
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-semibold">Workflow Monitor</h2>
+          {executionId && (
+            <button
+              onClick={resetMonitor}
+              className="text-sm text-red-600 hover:text-red-800"
+            >
+              Reset Monitor
+            </button>
+          )}
+        </div>
         
         {executionId ? (
           <WorkflowMonitor
+            key={executionId} /* Force re-mount on executionId change */
             workflowId={selectedWorkflow}
             executionId={executionId}
             onStart={() => {}}
