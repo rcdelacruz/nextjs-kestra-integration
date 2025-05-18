@@ -48,7 +48,6 @@ export async function GET(request: NextRequest) {
           try {
             controller.close();
           } catch (error) {
-            // Ignore errors if controller is already closed
             console.log('Stream already closed');
           }
         }
@@ -57,7 +56,7 @@ export async function GET(request: NextRequest) {
       // Store closeStream function for use in cancel
       closeStreamFn = closeStream;
 
-      // Function to safely enqueue data
+      // Function to safely enqueue data with error handling
       const safeEnqueue = (data: any) => {
         if (!isStreamClosed) {
           try {
@@ -72,8 +71,8 @@ export async function GET(request: NextRequest) {
       // Send initial connection event
       safeEnqueue({ status: 'connected' });
       
-      // Function to check execution status
-      const checkStatus = async () => {
+      // Function to check execution status with retry logic
+      const checkStatus = async (retryCount = 0) => {
         if (isStreamClosed) return;
 
         try {
@@ -81,11 +80,11 @@ export async function GET(request: NextRequest) {
             headers: {
               'Content-Type': 'application/json',
             },
-            cache: 'no-store' // Prevent caching of the execution data
+            cache: 'no-store'
           });
           
           if (!response.ok) {
-            throw new Error('Failed to fetch execution status');
+            throw new Error(`Failed to fetch execution status: ${response.statusText}`);
           }
           
           const executionData = await response.json() as KestraExecution;
@@ -100,76 +99,50 @@ export async function GET(request: NextRequest) {
             })) : []
           };
           
-          // Only send data if the stream is still open
+          // Send data to client
           safeEnqueue(formattedData);
           
-          // If the execution is in a terminal state, send one final update with flag
+          // Handle terminal states
           if (['SUCCESS', 'FAILED', 'KILLED'].includes(String(executionData.state))) {
-            // Send final update with special flag to ensure client knows it's complete
+            // Send final update with flag
             safeEnqueue({
               ...formattedData,
               finalUpdate: true
             });
             
             // Delay closing to ensure client receives the final message
-            setTimeout(() => {
-              closeStream();
-            }, 500);
+            setTimeout(closeStream, 1000);
             return;
           }
           
-          // Schedule next check only if stream is still open
+          // Schedule next check if not in terminal state
           if (!isStreamClosed) {
-            checkStatusTimeout = setTimeout(checkStatus, 1000);
+            checkStatusTimeout = setTimeout(() => checkStatus(0), 1000);
           }
         } catch (error) {
           console.error('Error fetching execution status:', error);
-          if (!isStreamClosed) {
-            safeEnqueue({ error: 'Failed to fetch status' });
+          
+          // Implement exponential backoff for retries
+          const maxRetries = 3;
+          const delay = Math.min(1000 * Math.pow(2, retryCount), 5000); // Cap at 5 seconds
+          
+          if (retryCount < maxRetries && !isStreamClosed) {
+            console.log(`Retrying in ${delay}ms (attempt ${retryCount + 1}/${maxRetries})`);
+            safeEnqueue({ 
+              status: 'retrying',
+              retryCount: retryCount + 1,
+              maxRetries,
+              delay
+            });
             
-            // Wait a bit and try one more time for resilience
-            if (!isStreamClosed) {
-              checkStatusTimeout = setTimeout(async () => {
-                try {
-                  const retryResponse = await fetch(`${process.env.NEXT_PUBLIC_KESTRA_URL}/api/v1/executions/${executionId}`, {
-                    headers: {
-                      'Content-Type': 'application/json',
-                    },
-                    cache: 'no-store'
-                  });
-                  
-                  if (retryResponse.ok) {
-                    const retryData = await retryResponse.json() as KestraExecution;
-                    safeEnqueue({
-                      ...retryData,
-                      state: String(retryData.state || 'RUNNING'),
-                      tasks: retryData.tasks ? retryData.tasks.map((task: KestraTask) => ({
-                        ...task,
-                        state: String(task.state || 'RUNNING')
-                      })) : [],
-                      retrySuccess: true
-                    });
-                    
-                    // If terminal state, close after sending
-                    if (['SUCCESS', 'FAILED', 'KILLED'].includes(String(retryData.state))) {
-                      setTimeout(closeStream, 500);
-                      return;
-                    }
-                    
-                    // Continue checking if not terminal
-                    checkStatusTimeout = setTimeout(checkStatus, 1000);
-                    return;
-                  }
-                } catch (retryError) {
-                  console.error('Retry failed:', retryError);
-                }
-                
-                // If we get here, the retry failed too
-                closeStream();
-              }, 2000);
-            } else {
-              closeStream();
-            }
+            checkStatusTimeout = setTimeout(() => checkStatus(retryCount + 1), delay);
+          } else {
+            console.error('Max retries reached or stream closed');
+            safeEnqueue({ 
+              error: 'Failed to fetch execution status after multiple attempts',
+              status: 'error'
+            });
+            closeStream();
           }
         }
       };
@@ -177,10 +150,9 @@ export async function GET(request: NextRequest) {
       // Start checking status
       checkStatus();
     },
+    
     cancel() {
-      // This will be called if the client disconnects
       console.log('Client disconnected, cleaning up stream');
-      // Use the stored closeStream function to properly clean up
       if (closeStreamFn) {
         closeStreamFn();
       }
