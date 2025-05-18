@@ -86,7 +86,7 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }: Wo
       // Calculate progress based on tasks
       if (data.tasks && Array.isArray(data.tasks) && data.tasks.length > 0) {
         const totalTasks = data.tasks.length;
-        const completedTasks = data.tasks.filter(task => 
+        const completedTasks = data.tasks.filter((task: ExecutionTask) => 
           ['SUCCESS', 'FAILED', 'KILLED'].includes(String(task.state).toUpperCase())
         ).length;
         
