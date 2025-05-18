@@ -4,10 +4,21 @@ description: |
   A sample workflow demonstrating integration with Next.js application.
   This workflow processes data with multiple steps and provides progress updates.
 
+inputs:
+  - id: message
+    type: STRING
+    defaults: Default test message
+    description: A message to log during workflow execution
+  
+  - id: iterations
+    type: INTEGER
+    defaults: 3
+    description: Number of iterations for the processing task
+
 tasks:
   - id: start
     type: io.kestra.plugin.core.log.Log
-    message: "Starting sample processing workflow"
+    message: "Starting sample processing workflow with message: {{ inputs.message }}"
 
   - id: fetch_data
     type: io.kestra.plugin.core.http.Request
@@ -17,30 +28,33 @@ tasks:
   - id: process_data
     type: io.kestra.plugin.scripts.shell.Commands
     commands:
-      - sleep 3 # Simulate processing
-      - echo "Processing data..."
+      - |
+        for i in $(seq 1 {{ inputs.iterations }}); do
+          echo "Processing iteration $i of {{ inputs.iterations }}..."
+          sleep 2
+        done
     taskRunner:
       type: io.kestra.plugin.core.runner.Process
 
   - id: transform_data
     type: io.kestra.plugin.scripts.shell.Commands
     commands:
-      - sleep 5 # Simulate transformation
-      - echo "Transforming data..."
+      - sleep 2
+      - echo "Transforming data with message: {{ inputs.message }}"
     taskRunner:
       type: io.kestra.plugin.core.runner.Process
 
   - id: validate_data
     type: io.kestra.plugin.scripts.shell.Commands
     commands:
-      - sleep 2 # Simulate validation
+      - sleep 1
       - echo "Validating data..."
     taskRunner:
       type: io.kestra.plugin.core.runner.Process
 
   - id: finalize
     type: io.kestra.plugin.core.log.Log
-    message: "Workflow completed successfully"
+    message: "Workflow completed successfully with message: {{ inputs.message }}"
 
 triggers:
   - id: webhook
