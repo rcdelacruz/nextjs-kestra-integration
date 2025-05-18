@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+export const dynamic = 'force-dynamic'; // Disable caching
+
 export async function POST(request: NextRequest) {
   try {
     // Get request body
@@ -48,6 +50,7 @@ export async function POST(request: NextRequest) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(inputs),
+      cache: 'no-store' // Ensure no caching
     });
     
     if (!response.ok) {
@@ -89,13 +92,15 @@ export async function POST(request: NextRequest) {
       flowId: data.flowId,
       status: data.state,
       message: 'Workflow triggered successfully',
+      timestamp: new Date().toISOString(), // Add timestamp to prevent caching
     });
   } catch (error) {
     console.error('Error triggering workflow:', error);
     return NextResponse.json(
       { 
         error: 'Failed to trigger workflow',
-        details: error.message
+        details: error.message,
+        timestamp: new Date().toISOString(), // Add timestamp to prevent caching
       },
       { status: 500 }
     );
