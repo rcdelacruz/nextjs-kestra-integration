@@ -1,32 +1,150 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { format } from 'date-fns';
 
-export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
-  const [status, setStatus] = useState('idle');
-  const [executionData, setExecutionData] = useState(null);
-  const [error, setError] = useState(null);
-  const [eventSource, setEventSource] = useState(null);
-  const [progress, setProgress] = useState(0);
-  const [parsingError, setParsingError] = useState(null);
-  
-  // Close event source on unmount
-  useEffect(() => {
-    return () => {
-      if (eventSource) {
-        eventSource.close();
+interface WorkflowMonitorProps {
+  workflowId: string;
+  executionId: string | null;
+  onStart: (workflowId: string) => Promise<void>;
+}
+
+interface ExecutionTask {
+  id: string;
+  state: string;
+  startDate?: string;
+  endDate?: string;
+  [key: string]: any;
+}
+
+interface ExecutionData {
+  state: string;
+  tasks?: ExecutionTask[];
+  end?: string;
+  [key: string]: any;
+}
+
+interface StatusInfo {
+  class: string;
+  label: string;
+}
+
+interface MessageEvent {
+  data: string;
+  type: string;
+  lastEventId: string;
+}
+
+type StreamState = 'connecting' | 'open' | 'closed' | 'error' | 'completed';
+
+export default function WorkflowMonitor({ workflowId, executionId, onStart }: WorkflowMonitorProps) {
+  const [status, setStatus] = useState<string>('idle');
+  const [executionData, setExecutionData] = useState<ExecutionData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [eventSource, setEventSource] = useState<EventSource | null>(null);
+  const [progress, setProgress] = useState<number>(0);
+  const [parsingError, setParsingError] = useState<string | null>(null);
+  const [streamState, setStreamState] = useState<StreamState>('connecting');
+  const [reconnectAttempt, setReconnectAttempt] = useState<number>(0);
+  const MAX_RECONNECT_ATTEMPTS = 5;
+  const INITIAL_RETRY_DELAY = 1000;
+
+  // Function to create and setup EventSource
+  const setupEventSource = useCallback(() => {
+    if (!executionId) return null;
+
+    const sse = new EventSource(`/api/workflow-status?executionId=${executionId}`);
+    
+    sse.onopen = () => {
+      console.log('SSE connection established');
+      setError(null);
+      setReconnectAttempt(0);
+      setStreamState('open');
+    };
+    
+    sse.onmessage = (event: MessageEvent) => {
+      try {
+        console.log('Received SSE data:', event.data);
+        const data = JSON.parse(event.data) as ExecutionData;
+        
+        // Update execution data
+        setExecutionData(data);
+        setParsingError(null);
+        
+        // Update status based on execution state
+        if (data.state) {
+          const stateStr = String(data.state).toLowerCase();
+          setStatus(stateStr);
+          
+          // If we reach a terminal state, close the stream naturally
+          if (['success', 'failed', 'killed'].includes(stateStr)) {
+            setStreamState('completed');
+            sse.close();
+            setEventSource(null);
+            return;
+          }
+        }
+        
+        // Calculate progress based on tasks
+        if (data.tasks && Array.isArray(data.tasks) && data.tasks.length > 0) {
+          const totalTasks = data.tasks.length;
+          const completedTasks = data.tasks.filter((task: ExecutionTask) => 
+            ['SUCCESS', 'FAILED', 'KILLED'].includes(String(task.state).toUpperCase())
+          ).length;
+          
+          const calculatedProgress = (completedTasks / totalTasks) * 100;
+          setProgress(calculatedProgress);
+        } else {
+          // If no tasks are available, increment progress gradually
+          setProgress(prev => Math.min(prev + 5, 90));
+        }
+      } catch (err) {
+        console.error('Error parsing SSE message:', err, event.data);
+        if (err instanceof Error) {
+          setParsingError(`Failed to parse execution data: ${err.message}`);
+        } else {
+          setParsingError('Failed to parse execution data: Unknown error');
+        }
+        setProgress(prev => Math.min(prev + 2, 90));
       }
     };
-  }, [eventSource]);
-  
-  // Monitor execution when executionId changes
+    
+    sse.onerror = (err: Event) => {
+      console.error('SSE error:', err);
+      setStreamState('error');
+      sse.close();
+      setEventSource(null);
+      
+      // Only attempt reconnect if it wasn't a natural completion
+      if (streamState !== 'completed' && reconnectAttempt < MAX_RECONNECT_ATTEMPTS) {
+        const delay = INITIAL_RETRY_DELAY * Math.pow(2, reconnectAttempt);
+        console.log(`Attempting to reconnect in ${delay}ms (attempt ${reconnectAttempt + 1})`);
+        
+        setError(`Connection lost. Reconnecting in ${delay/1000} seconds...`);
+        
+        setTimeout(() => {
+          setReconnectAttempt(prev => prev + 1);
+          const newSSE = setupEventSource();
+          if (newSSE) setEventSource(newSSE);
+        }, delay);
+      } else if (streamState !== 'completed') {
+        setError('Connection to workflow status lost. Please refresh the page to retry.');
+      }
+    };
+    
+    return sse;
+  }, [executionId, reconnectAttempt, streamState]);
+
+  // Setup EventSource when executionId changes
   useEffect(() => {
     if (!executionId) {
       setStatus('idle');
       setExecutionData(null);
       setProgress(0);
       setParsingError(null);
+      setError(null);
+      setReconnectAttempt(0);
+      setStreamState('closed');
       if (eventSource) {
         eventSource.close();
         setEventSource(null);
@@ -35,92 +153,35 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
     }
     
     setStatus('running');
-    
-    // Connect to Server-Sent Events endpoint
-    const sse = new EventSource(`/api/workflow-status?executionId=${executionId}`);
-    setEventSource(sse);
-    
-    sse.onopen = () => {
-      console.log('SSE connection established');
-    };
-    
-    sse.onmessage = (event) => {
-      try {
-        console.log('Received SSE data:', event.data);
-        const data = JSON.parse(event.data);
-        
-        // Update execution data
-        setExecutionData(data);
-        setParsingError(null);
-        
-        // Update status based on execution state - safely check state type
-        if (data.state) {
-          // Check if state is a string before using toLowerCase
-          if (typeof data.state === 'string') {
-            setStatus(data.state.toLowerCase());
-          } else {
-            console.log('State is not a string:', data.state);
-            // Default to 'running' if state is not a string
-            setStatus('running');
-          }
-        }
-        
-        // Calculate progress based on tasks or use a default increment if no tasks available
-        if (data.tasks && Array.isArray(data.tasks) && data.tasks.length > 0) {
-          const totalTasks = data.tasks.length;
-          const completedTasks = data.tasks.filter(task => 
-            task.state && ['SUCCESS', 'FAILED', 'KILLED'].includes(
-              typeof task.state === 'string' ? task.state : String(task.state)
-            )
-          ).length;
-          
-          const calculatedProgress = (completedTasks / totalTasks) * 100;
-          setProgress(calculatedProgress);
-        } else {
-          // If no tasks are available, just increment progress gradually
-          setProgress(prev => Math.min(prev + 5, 90)); // Cap at 90% until completion
-        }
-        
-        // Close connection when execution is in terminal state
-        if (data.state && ['SUCCESS', 'FAILED', 'KILLED'].includes(
-          typeof data.state === 'string' ? data.state : String(data.state)
-        )) {
-          sse.close();
-        }
-      } catch (err) {
-        console.error('Error parsing SSE message:', err, event.data);
-        setParsingError(`Failed to parse execution data: ${err.message}`);
-        
-        // Even with parsing error, still increment progress
-        setProgress(prev => Math.min(prev + 2, 90));
-      }
-    };
-    
-    sse.onerror = (err) => {
-      console.error('SSE error:', err);
-      setError('Connection to workflow status lost');
-      sse.close();
-    };
+    setStreamState('connecting');
+    const sse = setupEventSource();
+    if (sse) setEventSource(sse);
     
     return () => {
-      sse.close();
+      if (sse) {
+        setStreamState('closed');
+        sse.close();
+      }
     };
-  }, [executionId]);
-  
+  }, [executionId, setupEventSource]);
+
   const handleStartWorkflow = async () => {
     try {
       setError(null);
       await onStart(workflowId);
     } catch (err) {
-      setError(err.message);
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('An unknown error occurred');
+      }
     }
   };
   
-  const renderStatusBadge = (state) => {
-    // Ensure state is a string
-    const stateStr = typeof state === 'string' ? state.toLowerCase() : String(state).toLowerCase();
+  const renderStatusBadge = (state: string) => {
+    const stateStr = String(state).toLowerCase();
     
-    const stateMap = {
+    const stateMap: Record<string, StatusInfo> = {
       'running': { class: 'bg-yellow-100 text-yellow-800', label: 'Running' },
       'success': { class: 'bg-green-100 text-green-800', label: 'Success' },
       'failed': { class: 'bg-red-100 text-red-800', label: 'Failed' },
@@ -143,7 +204,10 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
     const kestraUrl = process.env.NEXT_PUBLIC_KESTRA_URL || 'https://kestra.coderstudio.co';
     window.open(`${kestraUrl}/ui/executions/${executionId}`, '_blank');
   };
-  
+
+  // Don't show connection lost error if workflow completed successfully
+  const shouldShowError = error && streamState !== 'completed';
+
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
@@ -157,7 +221,7 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
         </button>
       </div>
       
-      {error && (
+      {shouldShowError && (
         <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
           <p>{error}</p>
         </div>
@@ -167,7 +231,7 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
         <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4">
           <p className="text-yellow-700">{parsingError}</p>
           <p className="text-sm mt-1">
-            The workflow may still be running correctly. You can 
+            The workflow may still be running correctly. You can
             <button 
               onClick={viewInKestra} 
               className="ml-1 text-blue-600 hover:text-blue-800 underline"
@@ -223,10 +287,7 @@ export default function WorkflowMonitor({ workflowId, executionId, onStart }) {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {executionData.tasks.map((task) => {
-                    // Safe access of task properties
-                    if (!task || typeof task !== 'object') return null;
-                    
+                  {executionData.tasks.map((task: ExecutionTask) => {
                     const taskId = task.id || 'Unknown';
                     const startTime = task.startDate ? new Date(task.startDate) : null;
                     const endTime = task.endDate ? new Date(task.endDate) : null;
