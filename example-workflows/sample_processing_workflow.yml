@@ -45,4 +45,4 @@ tasks:
 triggers:
   - id: webhook
     type: io.kestra.plugin.core.trigger.Webhook
-    key: YOUR_WEBHOOK_KEY_HERE
+    key: "{{ kv('WEBHOOK_KEY') }}"
