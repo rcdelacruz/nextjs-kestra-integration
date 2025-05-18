@@ -1,0 +1,50 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 0, 0, 0;
+  --background-start-rgb: 214, 219, 220;
+  --background-end-rgb: 255, 255, 255;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: white;
+}
+
+.workflow-card {
+  @apply border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow;
+}
+
+.btn-primary {
+  @apply bg-kestra-blue hover:bg-kestra-dark text-white font-bold py-2 px-4 rounded;
+}
+
+.btn-secondary {
+  @apply bg-white text-kestra-blue border border-kestra-blue font-bold py-2 px-4 rounded hover:bg-gray-50;
+}
+
+.progress-bar {
+  @apply w-full h-4 bg-gray-200 rounded-full overflow-hidden;
+}
+
+.progress-bar-fill {
+  @apply h-full bg-kestra-blue transition-all duration-300 ease-in-out;
+}
+
+.status-badge {
+  @apply text-xs font-medium px-2 py-1 rounded-full;
+}
+
+.status-running {
+  @apply bg-yellow-100 text-yellow-800;
+}
+
+.status-success {
+  @apply bg-green-100 text-green-800;
+}
+
+.status-failed {
+  @apply bg-red-100 text-red-800;
+}
