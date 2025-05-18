@@ -13,6 +13,14 @@ export async function POST(request: NextRequest) {
     const namespace = process.env.KESTRA_NAMESPACE;
     const workflowId = requestData.workflowId;
     
+    // Debug info
+    console.log('Triggering workflow with params:', {
+      namespace,
+      workflowId,
+      webhookKeyExists: !!webhookKey,
+      inputsProvided: Object.keys(inputs)
+    });
+    
     if (!webhookKey || !namespace) {
       return NextResponse.json(
         { error: 'Kestra configuration missing. Check environment variables.' },
@@ -30,29 +38,44 @@ export async function POST(request: NextRequest) {
     // Trigger the Kestra workflow via webhook
     // The webhook key in the URL should match the value in the KV store
     const kestraUrl = process.env.NEXT_PUBLIC_KESTRA_URL;
-    const response = await fetch(
-      `${kestraUrl}/api/v1/executions/webhook/${namespace}/${workflowId}/${webhookKey}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(inputs),
-      }
-    );
+    const url = `${kestraUrl}/api/v1/executions/webhook/${namespace}/${workflowId}/${webhookKey}`;
+    
+    console.log('Making request to Kestra URL:', url);
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(inputs),
+    });
     
     if (!response.ok) {
       // Try to get the error message from the response
       let errorMessage;
+      let errorBody;
+      
       try {
-        const errorData = await response.json();
-        errorMessage = errorData.message || `Failed with status: ${response.status}`;
-      } catch {
+        errorBody = await response.json();
+        console.error('Error response from Kestra:', errorBody);
+        errorMessage = errorBody.message || `Failed with status: ${response.status}`;
+      } catch (parseError) {
+        console.error('Failed to parse error response:', parseError);
         errorMessage = `Failed with status: ${response.status}`;
       }
       
       return NextResponse.json(
-        { error: errorMessage },
+        { 
+          error: errorMessage,
+          status: response.status,
+          url: url,
+          // Include redacted versions of config to help debug
+          config: {
+            namespace: namespace,
+            workflowId: workflowId,
+            webhookKeyLength: webhookKey ? webhookKey.length : 0,
+          }
+        },
         { status: response.status }
       );
     }
@@ -70,7 +93,10 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Error triggering workflow:', error);
     return NextResponse.json(
-      { error: 'Failed to trigger workflow' },
+      { 
+        error: 'Failed to trigger workflow',
+        details: error.message
+      },
       { status: 500 }
     );
   }
