@@ -80,7 +80,8 @@ export async function GET(request: NextRequest) {
           const response = await fetch(`${process.env.NEXT_PUBLIC_KESTRA_URL}/api/v1/executions/${executionId}`, {
             headers: {
               'Content-Type': 'application/json',
-            }
+            },
+            cache: 'no-store' // Prevent caching of the execution data
           });
           
           if (!response.ok) {
@@ -102,9 +103,18 @@ export async function GET(request: NextRequest) {
           // Only send data if the stream is still open
           safeEnqueue(formattedData);
           
-          // If the execution is in a terminal state, close the stream
+          // If the execution is in a terminal state, send one final update with flag
           if (['SUCCESS', 'FAILED', 'KILLED'].includes(String(executionData.state))) {
-            closeStream();
+            // Send final update with special flag to ensure client knows it's complete
+            safeEnqueue({
+              ...formattedData,
+              finalUpdate: true
+            });
+            
+            // Delay closing to ensure client receives the final message
+            setTimeout(() => {
+              closeStream();
+            }, 500);
             return;
           }
           
@@ -116,8 +126,51 @@ export async function GET(request: NextRequest) {
           console.error('Error fetching execution status:', error);
           if (!isStreamClosed) {
             safeEnqueue({ error: 'Failed to fetch status' });
+            
+            // Wait a bit and try one more time for resilience
+            if (!isStreamClosed) {
+              checkStatusTimeout = setTimeout(async () => {
+                try {
+                  const retryResponse = await fetch(`${process.env.NEXT_PUBLIC_KESTRA_URL}/api/v1/executions/${executionId}`, {
+                    headers: {
+                      'Content-Type': 'application/json',
+                    },
+                    cache: 'no-store'
+                  });
+                  
+                  if (retryResponse.ok) {
+                    const retryData = await retryResponse.json() as KestraExecution;
+                    safeEnqueue({
+                      ...retryData,
+                      state: String(retryData.state || 'RUNNING'),
+                      tasks: retryData.tasks ? retryData.tasks.map((task: KestraTask) => ({
+                        ...task,
+                        state: String(task.state || 'RUNNING')
+                      })) : [],
+                      retrySuccess: true
+                    });
+                    
+                    // If terminal state, close after sending
+                    if (['SUCCESS', 'FAILED', 'KILLED'].includes(String(retryData.state))) {
+                      setTimeout(closeStream, 500);
+                      return;
+                    }
+                    
+                    // Continue checking if not terminal
+                    checkStatusTimeout = setTimeout(checkStatus, 1000);
+                    return;
+                  }
+                } catch (retryError) {
+                  console.error('Retry failed:', retryError);
+                }
+                
+                // If we get here, the retry failed too
+                closeStream();
+              }, 2000);
+            } else {
+              closeStream();
+            }
           }
-          closeStream();
         }
       };
       
@@ -138,7 +191,7 @@ export async function GET(request: NextRequest) {
   return new Response(stream, {
     headers: {
       'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
+      'Cache-Control': 'no-cache, no-transform',
       'Connection': 'keep-alive',
     },
   });
