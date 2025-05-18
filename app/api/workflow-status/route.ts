@@ -40,11 +40,22 @@ export async function GET(request: NextRequest) {
           
           const executionData = await response.json();
           
+          // Format the execution data for the client
+          // Ensure state is always a string to prevent parsing errors
+          const formattedData = {
+            ...executionData,
+            state: String(executionData.state || 'RUNNING'),
+            tasks: executionData.tasks ? executionData.tasks.map(task => ({
+              ...task,
+              state: String(task.state || 'RUNNING')
+            })) : []
+          };
+          
           // Send the execution data to the client
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(executionData)}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(formattedData)}\n\n`));
           
           // If the execution is in a terminal state, close the stream
-          if (['SUCCESS', 'FAILED', 'KILLED'].includes(executionData.state)) {
+          if (['SUCCESS', 'FAILED', 'KILLED'].includes(String(executionData.state))) {
             controller.close();
             return;
           }
